@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
+  "summary": "Plan pour corriger les bruits de console lors du chargement des polices et fournir des instructions détaillées pour l'utilisation de LibGraph2 avec g++.",
+  "updatedAt": "2026-01-21T15:47:18.009057643Z"
+}

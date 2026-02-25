@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_OTHER",
+  "summary": "Rapport détaillé du portage de LibGraph2 de Windows vers Linux. Analyse les dépendances Windows (Win32, GDI+), propose des solutions de remplacement avec SFML et tinyfiledialogs, fournit des exemples de code avant/après pour chaque fonction, un CMakeLists.txt, et estime l'effort à 40-62 heures.",
+  "updatedAt": "2026-01-20T14:13:46.281504151Z"
+}

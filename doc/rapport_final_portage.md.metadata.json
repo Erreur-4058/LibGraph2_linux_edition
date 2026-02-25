@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_WALKTHROUGH",
+  "summary": "Rapport final du portage de LibGraph2 vers Linux. Documente les modifications effectuées, les fichiers créés/modifiés, la compilation réussie de libLibGraph2.so, les fonctionnalités portées (rendu 2D complet avec SFML), les limitations actuelles (dialogues non implémentés, problèmes de linkage mineurs), et les prochaines étapes recommandées.",
+  "updatedAt": "2026-01-20T14:47:33.315448202Z"
+}

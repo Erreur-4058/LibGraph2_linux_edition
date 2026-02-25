@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_WALKTHROUGH",
+  "summary": "Guide d'utilisation de LibGraph2 sur Windows 11. Ce guide explique comment utiliser soit la version originale (GDI+) via Visual Studio, soit la nouvelle version portable (SFML) sur Windows. Inclut les étapes de configuration du projet, la gestion des dépendances et un exemple de code.",
+  "updatedAt": "2026-01-21T16:00:44.510876446Z"
+}

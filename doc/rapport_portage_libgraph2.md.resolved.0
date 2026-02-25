@@ -1,0 +1,1037 @@
+# Rapport de Portage : LibGraph2 vers Linux avec SFML
+
+## Vue d'Ensemble
+
+Ce rapport détaille les étapes nécessaires pour porter la bibliothèque LibGraph2 de Windows vers Linux en remplaçant les API Windows (Win32, GDI+) par des bibliothèques multiplateformes (SFML et tinyfiledialogs).
+
+### Technologies Actuelles (Windows)
+- **Fenêtrage** : Win32 API (`CreateWindow`, `GetMessage`, `DispatchMessage`)
+- **Rendu 2D** : GDI+ (`Graphics`, [Pen](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2impGDIPLUS.cpp#500-511), [Brush](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2impGDIPLUS.cpp#512-517), `Image`)
+- **Boîtes de dialogue** : API Windows natives (`ChooseColor`, `IFileDialog`, [MessageBox](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2impGDIPLUS.cpp#694-698))
+- **Build** : Visual Studio Project Files ([.vcxproj](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2.vcxproj))
+
+### Technologies Cibles (Linux)
+- **Fenêtrage et Rendu** : SFML (`sf::RenderWindow`, `sf::Shape`, `sf::Sprite`)
+- **Boîtes de dialogue** : tinyfiledialogs
+- **Build** : CMake
+
+---
+
+## Phase 1 : Mise en Place du Nouvel Environnement de Build
+
+### Fichiers à Supprimer
+- [LibGraph2.vcxproj](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2.vcxproj)
+- [LibGraph2.vcxproj.filters](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2.vcxproj.filters)
+- [LibGraph2.vcxproj.user](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2.vcxproj.user)
+
+### Fichier à Créer : CMakeLists.txt
+
+```cmake
+cmake_minimum_required(VERSION 3.10)
+project(LibGraph2 VERSION 2.0 LANGUAGES CXX)
+
+# Standard C++17
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Recherche de SFML
+find_package(SFML 2.5 COMPONENTS system window graphics REQUIRED)
+
+# Sources principales (après refactoring)
+set(SOURCES
+    LibGraph2.cpp
+    LibGraph2impSFML.cpp
+    # Ajouter autres fichiers .cpp nécessaires
+)
+
+# Inclusion de tinyfiledialogs (fichier unique)
+set(SOURCES ${SOURCES} tinyfiledialogs.c)
+
+# Création de la bibliothèque partagée
+add_library(LibGraph2 SHARED ${SOURCES})
+
+# Liaison avec SFML
+target_link_libraries(LibGraph2 
+    sfml-system 
+    sfml-window 
+    sfml-graphics
+)
+
+# Répertoires d'inclusion
+target_include_directories(LibGraph2 PUBLIC 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# Installation
+install(TARGETS LibGraph2 DESTINATION lib)
+install(FILES LibGraph2.h DESTINATION include)
+```
+
+---
+
+## Phase 2 : Refactoring de l'Architecture de Fenêtrage
+
+### Fichiers Concernés
+- `LibGraphWnd.h/.cpp` ❌ **À SUPPRIMER**
+- `LibGraphMainWnd.h/.cpp` ❌ **À SUPPRIMER**
+- `LibGraphGraphicWnd.h/.cpp` ❌ **À SUPPRIMER**
+- `LibGraphConsoleWnd.h/.cpp` ❌ **À SUPPRIMER**
+- `CaptionBar.h/.cpp` ❌ **À SUPPRIMER**
+- `LibGraphCinStreamBuf.h/.cpp` ❌ **À SUPPRIMER**
+
+### Changements Architecturaux
+
+#### AVANT (Windows - Hiérarchie complexe)
+```cpp
+// LibGraphWnd.h - Classe de base pour fenêtres Win32
+class CLibGraphWnd {
+private:
+    HWND m_hWnd;
+    static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, 
+                                    WPARAM wParam, LPARAM lParam);
+public:
+    void Create(DWORD dwExStyle, const std::wstring& strName, 
+                DWORD dwStyle, int x, int y, int width, int height, 
+                CLibGraphWnd* const pParent, HMENU hMenuOrChildId=0);
+};
+
+// LibGraphMainWnd.h - Fenêtre principale
+class CLibGraphMainWnd : public CLibGraphWnd {
+private:
+    CLibGraphGraphicWnd m_wndGraphicWnd;  // Fenêtre de dessin
+    CLibGraphConsoleWnd m_wndConsoleWnd;  // Fenêtre console
+    CCaptionBar m_capConsole;             // Barre de titre custom
+    // Redirection de console complexe
+    int m_hStdoutPipe[2];
+    FILE* m_stdoutStream;
+};
+```
+
+#### APRÈS (Linux - Architecture simplifiée)
+```cpp
+// LibGraph2.h - Classe unique encapsulant SFML
+class CLibGraph2 {
+private:
+    sf::RenderWindow* m_pWindow;
+    // Plus besoin de hiérarchie de fenêtres
+    // La console utilise std::cout/std::cin natifs
+    
+public:
+    void show(const CSize& szWndSize = CSize(), bool bFullScreen=false);
+    bool waitForEvent(evt& e);
+    // ... fonctions de dessin
+};
+```
+
+### Boucle d'Événements
+
+#### AVANT (Windows)
+```cpp
+bool CLibGraph2::waitForEvent(evt& e) {
+    MSG msg;
+    BOOL bRet;
+    
+    while((bRet = GetMessage(&msg, NULL, NULL, NULL)) != 0) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+        
+        switch(msg.message) {
+        case LG_MOUSEMOVE:
+            e.type = evt_type::evtMouseMove;
+            e.x = round(MapCoordinateX((SHORT)msg.wParam));
+            e.y = round(MapCoordinateY((SHORT)msg.lParam));
+            return true;
+        case LG_KEYDOWN:
+            e.type = evt_type::evtKeyDown;
+            e.vkKeyCode = static_cast<unsigned int>(msg.wParam);
+            return true;
+        // ...
+        }
+    }
+    return false;
+}
+```
+
+#### APRÈS (Linux/SFML)
+```cpp
+bool CLibGraph2::waitForEvent(evt& e) {
+    sf::Event event;
+    
+    while (m_pWindow->pollEvent(event)) {
+        switch (event.type) {
+        case sf::Event::MouseMoved:
+            e.type = evt_type::evtMouseMove;
+            e.x = event.mouseMove.x;
+            e.y = event.mouseMove.y;
+            return true;
+            
+        case sf::Event::KeyPressed:
+            e.type = evt_type::evtKeyDown;
+            e.vkKeyCode = event.key.code;
+            return true;
+            
+        case sf::Event::Closed:
+            e.type = evt_type::evtClose;
+            return false;
+            
+        // ... autres événements
+        }
+    }
+    return true;
+}
+```
+
+### Suppression de la Redirection de Console
+
+**Problème Windows** : Sur Windows, LibGraph2 créait une console personnalisée intégrée à la fenêtre avec redirection de `stdout`/`stderr` via des pipes.
+
+**Solution Linux** : Sur Linux, `std::cout` et `std::cin` fonctionnent nativement dans le terminal. Toute la logique de `LibGraphConsoleWnd`, `LibGraphCinStreamBuf`, et la redirection de pipes dans `LibGraphMainWnd::RedirectConsoleIO()` doit être **supprimée**.
+
+---
+
+## Phase 3 : Remplacement du Moteur de Rendu (GDI+ → SFML)
+
+### Fichiers Concernés
+- `LibGraph2impGDIPLUS.h/.cpp` ✏️ **À REMPLACER** par `LibGraph2impSFML.h/.cpp`
+- `LibGraph2impDX.h/.cpp` ❌ **À SUPPRIMER** (DirectX)
+- `LibGraph2impGL.h/.cpp` ❌ **À SUPPRIMER** (OpenGL)
+- [LibGraph2impCommon.cpp](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2impCommon.cpp) ❌ **À SUPPRIMER**
+- [libgraph2imp.h](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/libgraph2imp.h) ✏️ **À ADAPTER**
+
+### Gestion du Crayon et du Pinceau
+
+#### AVANT (GDI+)
+```cpp
+class CLibGraph2 {
+private:
+    Gdiplus::Pen* m_pPen;
+    Gdiplus::Brush* m_pBrush;
+    Gdiplus::Graphics* m_pGraphics;
+    
+public:
+    void setPen(ARGB color, float fWidth, pen_DashStyles style) {
+        delete m_pPen;
+        m_pPen = new Pen(Color((Gdiplus::ARGB)color), (REAL)fWidth);
+        m_pPen->SetDashStyle((Gdiplus::DashStyle)style);
+    }
+    
+    void setSolidBrush(ARGB color) {
+        delete m_pBrush;
+        m_pBrush = new SolidBrush(Color((Gdiplus::ARGB)color));
+    }
+};
+```
+
+#### APRÈS (SFML)
+```cpp
+class CLibGraph2 {
+private:
+    sf::RenderWindow* m_pWindow;
+    // Stockage des attributs de dessin actuels
+    sf::Color m_outlineColor;
+    float m_outlineThickness;
+    sf::Color m_fillColor;
+    
+public:
+    void setPen(ARGB color, float fWidth, pen_DashStyles style) {
+        m_outlineColor = sf::Color(GetR(color), GetG(color), 
+                                    GetB(color), GetA(color));
+        m_outlineThickness = fWidth;
+        // Note: SFML ne supporte pas nativement les styles pointillés
+        // Il faudra les implémenter manuellement si nécessaire
+    }
+    
+    void setSolidBrush(ARGB color) {
+        m_fillColor = sf::Color(GetR(color), GetG(color), 
+                                GetB(color), GetA(color));
+    }
+};
+```
+
+### Fonctions de Dessin
+
+#### 1. drawEllipse
+
+**AVANT (GDI+)**
+```cpp
+void CLibGraph2::drawEllipse(const CRectangle& bounds) {
+    if(NeedToFill())
+        m_pGraphics->FillEllipse(m_pBrush, 
+            UnmapCoordinateX(bounds.m_ptTopLeft.m_fX), 
+            UnmapCoordinateY(bounds.m_ptTopLeft.m_fY), 
+            UnmapWidth(bounds.m_szSize.m_fWidth), 
+            UnmapHeight(bounds.m_szSize.m_fHeight));
+    m_pGraphics->DrawEllipse(m_pPen, 
+            UnmapCoordinateX(bounds.m_ptTopLeft.m_fX), 
+            UnmapCoordinateY(bounds.m_ptTopLeft.m_fY), 
+            UnmapWidth(bounds.m_szSize.m_fWidth), 
+            UnmapHeight(bounds.m_szSize.m_fHeight));
+}
+```
+
+**APRÈS (SFML)**
+```cpp
+void CLibGraph2::drawEllipse(const CRectangle& bounds) {
+    sf::CircleShape ellipse;
+    
+    // SFML utilise CircleShape avec setScale pour créer une ellipse
+    float radiusX = bounds.m_szSize.m_fWidth / 2.0f;
+    float radiusY = bounds.m_szSize.m_fHeight / 2.0f;
+    
+    ellipse.setRadius(radiusX);
+    ellipse.setScale(1.0f, radiusY / radiusX);
+    ellipse.setPosition(bounds.m_ptTopLeft.m_fX, bounds.m_ptTopLeft.m_fY);
+    
+    // Application des couleurs
+    ellipse.setFillColor(m_fillColor);
+    ellipse.setOutlineColor(m_outlineColor);
+    ellipse.setOutlineThickness(m_outlineThickness);
+    
+    m_pWindow->draw(ellipse);
+}
+```
+
+#### 2. drawLine
+
+**AVANT (GDI+)**
+```cpp
+void CLibGraph2::drawLine(const CPoint& ptP1, const CPoint& ptP2) {
+    m_pGraphics->DrawLine(m_pPen, 
+        UnmapCoordinateX(ptP1.m_fX), UnmapCoordinateY(ptP1.m_fY), 
+        UnmapCoordinateX(ptP2.m_fX), UnmapCoordinateY(ptP2.m_fY));
+}
+```
+
+**APRÈS (SFML)**
+```cpp
+void CLibGraph2::drawLine(const CPoint& ptP1, const CPoint& ptP2) {
+    sf::VertexArray line(sf::Lines, 2);
+    
+    line[0].position = sf::Vector2f(ptP1.m_fX, ptP1.m_fY);
+    line[0].color = m_outlineColor;
+    
+    line[1].position = sf::Vector2f(ptP2.m_fX, ptP2.m_fY);
+    line[1].color = m_outlineColor;
+    
+    m_pWindow->draw(line);
+}
+```
+
+#### 3. drawRectangle
+
+**AVANT (GDI+)**
+```cpp
+void CLibGraph2::drawRectangle(const CRectangle& bounds) {
+    if(NeedToFill())
+        m_pGraphics->FillRectangle(m_pBrush, 
+            UnmapCoordinateX(bounds.m_ptTopLeft.m_fX), 
+            UnmapCoordinateY(bounds.m_ptTopLeft.m_fY), 
+            UnmapWidth(bounds.m_szSize.m_fWidth), 
+            UnmapHeight(bounds.m_szSize.m_fHeight));
+    m_pGraphics->DrawRectangle(m_pPen, 
+            UnmapCoordinateX(bounds.m_ptTopLeft.m_fX), 
+            UnmapCoordinateY(bounds.m_ptTopLeft.m_fY), 
+            UnmapWidth(bounds.m_szSize.m_fWidth), 
+            UnmapHeight(bounds.m_szSize.m_fHeight));
+}
+```
+
+**APRÈS (SFML)**
+```cpp
+void CLibGraph2::drawRectangle(const CRectangle& bounds) {
+    sf::RectangleShape rect;
+    
+    rect.setSize(sf::Vector2f(bounds.m_szSize.m_fWidth, 
+                              bounds.m_szSize.m_fHeight));
+    rect.setPosition(bounds.m_ptTopLeft.m_fX, bounds.m_ptTopLeft.m_fY);
+    
+    rect.setFillColor(m_fillColor);
+    rect.setOutlineColor(m_outlineColor);
+    rect.setOutlineThickness(m_outlineThickness);
+    
+    m_pWindow->draw(rect);
+}
+```
+
+#### 4. drawPolylines
+
+**AVANT (GDI+)**
+```cpp
+void CLibGraph2::drawPolylines(const vector<CPoint>& vPoints, bool bAutoClose) {
+    const size_t nNbPoints = vPoints.size();
+    PointF *pts = new PointF[nNbPoints];
+    
+    for(int i=0; i<nNbPoints; i++) {
+        pts[i].X = UnmapCoordinateX(vPoints[i].m_fX);
+        pts[i].Y = UnmapCoordinateY(vPoints[i].m_fY);
+    }
+    
+    if(!bAutoClose)
+        m_pGraphics->DrawLines(m_pPen, pts, nNbPoints);
+    else {
+        if(NeedToFill())
+            m_pGraphics->FillPolygon(m_pBrush, pts, nNbPoints);
+        m_pGraphics->DrawPolygon(m_pPen, pts, nNbPoints);
+    }
+    delete[] pts;
+}
+```
+
+**APRÈS (SFML)**
+```cpp
+void CLibGraph2::drawPolylines(const vector<CPoint>& vPoints, bool bAutoClose) {
+    if(bAutoClose) {
+        // Polygone fermé
+        sf::ConvexShape polygon;
+        polygon.setPointCount(vPoints.size());
+        
+        for(size_t i=0; i<vPoints.size(); i++) {
+            polygon.setPoint(i, sf::Vector2f(vPoints[i].m_fX, vPoints[i].m_fY));
+        }
+        
+        polygon.setFillColor(m_fillColor);
+        polygon.setOutlineColor(m_outlineColor);
+        polygon.setOutlineThickness(m_outlineThickness);
+        
+        m_pWindow->draw(polygon);
+    } else {
+        // Ligne brisée
+        sf::VertexArray lines(sf::LineStrip, vPoints.size());
+        
+        for(size_t i=0; i<vPoints.size(); i++) {
+            lines[i].position = sf::Vector2f(vPoints[i].m_fX, vPoints[i].m_fY);
+            lines[i].color = m_outlineColor;
+        }
+        
+        m_pWindow->draw(lines);
+    }
+}
+```
+
+#### 5. drawPie (⚠️ DÉFI MAJEUR)
+
+**Problème** : SFML ne fournit pas de primitive "camembert" (pie chart). Il faut la créer manuellement.
+
+**AVANT (GDI+)**
+```cpp
+void CLibGraph2::drawPie(const CRectangle& bounds, float startAngle, float sweepAngle) {
+    if(NeedToFill())
+        m_pGraphics->FillPie(m_pBrush, 
+            UnmapCoordinateX(bounds.m_ptTopLeft.m_fX), 
+            UnmapCoordinateY(bounds.m_ptTopLeft.m_fY), 
+            UnmapWidth(bounds.m_szSize.m_fWidth), 
+            UnmapHeight(bounds.m_szSize.m_fHeight), 
+            startAngle, sweepAngle);
+    m_pGraphics->DrawPie(m_pPen, 
+            UnmapCoordinateX(bounds.m_ptTopLeft.m_fX), 
+            UnmapCoordinateY(bounds.m_ptTopLeft.m_fY), 
+            UnmapWidth(bounds.m_szSize.m_fWidth), 
+            UnmapHeight(bounds.m_szSize.m_fHeight), 
+            startAngle, sweepAngle);
+}
+```
+
+**APRÈS (SFML - Implémentation manuelle)**
+```cpp
+void CLibGraph2::drawPie(const CRectangle& bounds, float startAngle, float sweepAngle) {
+    const int segments = 50; // Nombre de segments pour l'arc
+    sf::VertexArray pie(sf::TriangleFan, segments + 2);
+    
+    float centerX = bounds.m_ptTopLeft.m_fX + bounds.m_szSize.m_fWidth / 2.0f;
+    float centerY = bounds.m_ptTopLeft.m_fY + bounds.m_szSize.m_fHeight / 2.0f;
+    float radiusX = bounds.m_szSize.m_fWidth / 2.0f;
+    float radiusY = bounds.m_szSize.m_fHeight / 2.0f;
+    
+    // Premier point = centre
+    pie[0].position = sf::Vector2f(centerX, centerY);
+    pie[0].color = m_fillColor;
+    
+    // Points sur l'arc
+    float startRad = startAngle * M_PI / 180.0f;
+    float sweepRad = sweepAngle * M_PI / 180.0f;
+    
+    for(int i = 0; i <= segments; i++) {
+        float angle = startRad + (sweepRad * i / segments);
+        float x = centerX + radiusX * cos(angle);
+        float y = centerY + radiusY * sin(angle);
+        
+        pie[i + 1].position = sf::Vector2f(x, y);
+        pie[i + 1].color = m_fillColor;
+    }
+    
+    m_pWindow->draw(pie);
+    
+    // Dessiner le contour (optionnel, plus complexe)
+    // Nécessite de dessiner les lignes du contour séparément
+}
+```
+
+#### 6. drawBitmap
+
+**AVANT (GDI+)**
+```cpp
+class CLibGraph2 {
+private:
+    typedef std::map<std::wstring, Gdiplus::CachedBitmap*> OptimizedImageCacheType;
+    typedef std::map<std::wstring, Gdiplus::Image*> ImageCacheType;
+    OptimizedImageCacheType m_mapOptimizedImageCache;
+    ImageCacheType m_mapImageCache;
+    
+public:
+    void drawBitmap(const CString& sFileName, const CPoint& ptPos, 
+                    double dScaleFactor, double angleDeg, bool bXYIsCenter) {
+        Image& img = Cached(sFileName);
+        // ... transformations avec Gdiplus::Matrix
+        m_pGraphics->DrawImage(&img, destPoints, 3);
+    }
+};
+```
+
+**APRÈS (SFML)**
+```cpp
+class CLibGraph2 {
+private:
+    std::map<std::string, sf::Texture> m_textureCache;
+    
+public:
+    void drawBitmap(const CString& sFileName, const CPoint& ptPos, 
+                    double dScaleFactor, double angleDeg, bool bXYIsCenter) {
+        // Charger ou récupérer la texture du cache
+        if(m_textureCache.find(sFileName) == m_textureCache.end()) {
+            sf::Texture texture;
+            if(!texture.loadFromFile(sFileName))
+                return; // Erreur de chargement
+            m_textureCache[sFileName] = texture;
+        }
+        
+        sf::Sprite sprite;
+        sprite.setTexture(m_textureCache[sFileName]);
+        
+        // Transformations natives de SFML
+        if(bXYIsCenter) {
+            sf::FloatRect bounds = sprite.getLocalBounds();
+            sprite.setOrigin(bounds.width / 2.0f, bounds.height / 2.0f);
+        }
+        
+        sprite.setPosition(ptPos.m_fX, ptPos.m_fY);
+        sprite.setScale(dScaleFactor, dScaleFactor);
+        sprite.setRotation(angleDeg);
+        
+        m_pWindow->draw(sprite);
+    }
+};
+```
+
+#### 7. drawString
+
+**AVANT (GDI+)**
+```cpp
+class CLibGraph2 {
+private:
+    Gdiplus::Font* m_pFont;
+    
+public:
+    void setFont(const CString& strFontName, float fPointSize, font_styles nStyleFlags) {
+        delete m_pFont;
+        m_pFont = new Font(strFontName.c_str(), fPointSize, nStyleFlags);
+    }
+    
+    void drawString(const CString& text, const CPoint& ptPos) {
+        m_pGraphics->DrawString(text.c_str(), -1, m_pFont, 
+            PointF(ptPos.m_fX, ptPos.m_fY), m_pBrush);
+    }
+};
+```
+
+**APRÈS (SFML)**
+```cpp
+class CLibGraph2 {
+private:
+    sf::Font m_font;
+    float m_fontSize;
+    font_styles m_fontStyle;
+    
+public:
+    void setFont(const CString& strFontName, float fPointSize, font_styles nStyleFlags) {
+        // Charger la police depuis le système
+        // Sur Linux: /usr/share/fonts/
+        std::string fontPath = "/usr/share/fonts/truetype/" + strFontName + ".ttf";
+        if(!m_font.loadFromFile(fontPath)) {
+            // Fallback vers police par défaut
+            m_font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+        }
+        m_fontSize = fPointSize;
+        m_fontStyle = nStyleFlags;
+    }
+    
+    void drawString(const CString& text, const CPoint& ptPos) {
+        sf::Text sfText;
+        sfText.setFont(m_font);
+        sfText.setString(text);
+        sfText.setCharacterSize(static_cast<unsigned int>(m_fontSize));
+        sfText.setFillColor(m_fillColor); // Le texte utilise la couleur de remplissage
+        sfText.setPosition(ptPos.m_fX, ptPos.m_fY);
+        
+        // Appliquer le style
+        if(m_fontStyle & FontStyleBold)
+            sfText.setStyle(sf::Text::Bold);
+        if(m_fontStyle & FontStyleItalic)
+            sfText.setStyle(sfText.getStyle() | sf::Text::Italic);
+        
+        m_pWindow->draw(sfText);
+    }
+};
+```
+
+---
+
+## Phase 4 : Remplacement des Boîtes de Dialogue
+
+### Fichiers à Supprimer
+- `DlgColor.h/.cpp` ❌
+- `DlgFile.h/.cpp` ❌
+- `DlgFont.h/.cpp` ❌
+- `DlgInput.h/.cpp` ❌
+- `DlgPenStyle.h/.cpp` ❌
+- [LibGraph2.rc](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2.rc) ❌ (fichier de ressources Windows)
+- [resource.h](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/resource.h) ❌
+
+### Installation de tinyfiledialogs
+
+Télécharger `tinyfiledialogs.h` et `tinyfiledialogs.c` depuis :
+https://sourceforge.net/projects/tinyfiledialogs/
+
+### Implémentation des Fonctions GUI
+
+#### 1. guiGetFileName
+
+**AVANT (Windows)**
+```cpp
+bool CLibGraph2::guiGetFileName(CString& sFileName, bool bOpen, 
+                                const vector<CString>& vstrFileTypes) {
+    CDlgFile dlg(m_pwndMainWnd->GetHWND());
+    dlg.m_sFileName = (wstring)sFileName;
+    
+    // Conversion des types de fichiers
+    wstring* psWsFileTypes = new wstring[vstrFileTypes.size()];
+    // ...
+    
+    if(dlg.DoModal(bOpen, psWsFileTypes, vstrFileTypes.size())) {
+        sFileName = dlg.m_sFileName;
+        return true;
+    }
+    return false;
+}
+```
+
+**APRÈS (Linux/tinyfiledialogs)**
+```cpp
+#include "tinyfiledialogs.h"
+
+bool CLibGraph2::guiGetFileName(CString& sFileName, bool bOpen, 
+                                const vector<CString>& vstrFileTypes) {
+    // Conversion des filtres
+    std::vector<const char*> patterns;
+    for(const auto& type : vstrFileTypes) {
+        patterns.push_back(type.c_str());
+    }
+    
+    const char* result;
+    if(bOpen) {
+        result = tinyfd_openFileDialog(
+            "Ouvrir un fichier",           // Titre
+            sFileName.c_str(),             // Chemin par défaut
+            patterns.size(),               // Nombre de filtres
+            patterns.data(),               // Filtres
+            NULL,                          // Description des filtres
+            0                              // Sélection multiple (0=non)
+        );
+    } else {
+        result = tinyfd_saveFileDialog(
+            "Enregistrer un fichier",
+            sFileName.c_str(),
+            patterns.size(),
+            patterns.data(),
+            NULL
+        );
+    }
+    
+    if(result) {
+        sFileName = result;
+        return true;
+    }
+    return false;
+}
+```
+
+#### 2. guiGetColor
+
+**AVANT (Windows)**
+```cpp
+bool CLibGraph2::guiGetColor(ARGB& color) {
+    CDlgColor dlg(m_pwndMainWnd->GetHWND());
+    dlg.m_color = color;
+    
+    if(dlg.DoModal()) {
+        color = dlg.m_color;
+        return true;
+    }
+    return false;
+}
+```
+
+**APRÈS (Linux/tinyfiledialogs)**
+```cpp
+bool CLibGraph2::guiGetColor(ARGB& color) {
+    unsigned char rgbOut[3];
+    unsigned char rgbIn[3] = {GetR(color), GetG(color), GetB(color)};
+    
+    const char* result = tinyfd_colorChooser(
+        "Choisir une couleur",
+        NULL,                    // Couleur hex (NULL pour utiliser rgbIn)
+        rgbIn,                   // Couleur RGB initiale
+        rgbOut                   // Couleur RGB résultante
+    );
+    
+    if(result) {
+        // tinyfiledialogs ne gère pas l'alpha, conserver l'alpha existant
+        color = MakeARGB(GetA(color), rgbOut[0], rgbOut[1], rgbOut[2]);
+        return true;
+    }
+    return false;
+}
+```
+
+#### 3. guiGetValue
+
+**AVANT (Windows)**
+```cpp
+bool CLibGraph2::guiGetValue(CString& strVal, const CString& strTitle, 
+                             const CString& strLabel) {
+    CDlgInput dlg(m_pwndMainWnd->GetHWND());
+    return dlg.DoModal(strVal, strTitle, strLabel);
+}
+```
+
+**APRÈS (Linux/tinyfiledialogs)**
+```cpp
+bool CLibGraph2::guiGetValue(CString& strVal, const CString& strTitle, 
+                             const CString& strLabel) {
+    const char* result = tinyfd_inputBox(
+        strTitle.c_str(),
+        strLabel.c_str(),
+        strVal.c_str()          // Valeur par défaut
+    );
+    
+    if(result) {
+        strVal = result;
+        return true;
+    }
+    return false;
+}
+
+bool CLibGraph2::guiGetValue(int& nVal, const CString& strTitle, 
+                             const CString& strLabel) {
+    CString strVal = std::to_string(nVal);
+    if(guiGetValue(strVal, strTitle, strLabel)) {
+        try {
+            nVal = std::stoi(strVal);
+            return true;
+        } catch(...) {
+            return false;
+        }
+    }
+    return false;
+}
+```
+
+#### 4. guiMessageBox
+
+**AVANT (Windows)**
+```cpp
+msgbtn_answer CLibGraph2::guiMessageBox(const CString& strTitle, 
+                                        const CString& strText, 
+                                        msgbtn_types btns, 
+                                        msgicon_types icon, 
+                                        msgdefbtn_vals defbtn) {
+    return (msgbtn_answer)MessageBox(
+        m_pwndMainWnd->GetHWND(), 
+        strText->c_str(), 
+        strTitle->c_str(), 
+        (UINT)(btns + icon + defbtn)
+    );
+}
+```
+
+**APRÈS (Linux/tinyfiledialogs)**
+```cpp
+msgbtn_answer CLibGraph2::guiMessageBox(const CString& strTitle, 
+                                        const CString& strText, 
+                                        msgbtn_types btns, 
+                                        msgicon_types icon, 
+                                        msgdefbtn_vals defbtn) {
+    // Conversion du type d'icône
+    const char* iconType;
+    switch(icon) {
+        case msgicon_types::MsgIcnStop:        iconType = "error"; break;
+        case msgicon_types::MsgIcnQuestion:    iconType = "question"; break;
+        case msgicon_types::MsgIcnExclamation: iconType = "warning"; break;
+        case msgicon_types::MsgIcnInformation: iconType = "info"; break;
+        default:                                iconType = "info"; break;
+    }
+    
+    // Conversion du type de boutons
+    const char* buttonType;
+    switch(btns) {
+        case msgbtn_types::MsgBtnOK:           buttonType = "ok"; break;
+        case msgbtn_types::MsgBtnOKCancel:     buttonType = "okcancel"; break;
+        case msgbtn_types::MsgBtnYesNo:        buttonType = "yesno"; break;
+        case msgbtn_types::MsgBtnYesNoCancel:  buttonType = "yesnocancel"; break;
+        default:                                buttonType = "ok"; break;
+    }
+    
+    int result = tinyfd_messageBox(
+        strTitle.c_str(),
+        strText.c_str(),
+        buttonType,
+        iconType,
+        1  // Bouton par défaut
+    );
+    
+    // Conversion du résultat
+    if(btns == msgbtn_types::MsgBtnYesNo || btns == msgbtn_types::MsgBtnYesNoCancel) {
+        return result == 1 ? msgbtn_answer::MsgAnsYes : msgbtn_answer::MsgAnsNo;
+    }
+    return result == 1 ? msgbtn_answer::MsgAnsOk : msgbtn_answer::MsgAnsCancel;
+}
+```
+
+#### 5. guiGetFont et guiGetPenStyle
+
+**Problème** : tinyfiledialogs ne fournit pas de sélecteur de police ou de style de stylo.
+
+**Solution** : Décomposer en plusieurs boîtes de dialogue simples :
+
+```cpp
+bool CLibGraph2::guiGetFont(CString& strFontName, float& fSize, 
+                            font_styles& nStyleFlags) {
+    // Demander le nom de la police
+    if(!guiGetValue(strFontName, "Police", "Nom de la police :"))
+        return false;
+    
+    // Demander la taille
+    CString strSize = std::to_string(static_cast<int>(fSize));
+    if(!guiGetValue(strSize, "Police", "Taille :"))
+        return false;
+    
+    try {
+        fSize = std::stof(strSize);
+    } catch(...) {
+        return false;
+    }
+    
+    // Demander le style (simplifié)
+    int style = tinyfd_messageBox(
+        "Style de police",
+        "Choisir le style",
+        "yesnocancel",
+        "question",
+        1
+    );
+    // 1=Oui (Gras), 0=Non (Normal), 2=Annuler (Italique)
+    // Cette approche est limitée, à améliorer
+    
+    return true;
+}
+
+bool CLibGraph2::guiGetPenStyle(ARGB& color, float& fWidth, 
+                                pen_DashStyles& style) {
+    // Sélectionner la couleur
+    if(!guiGetColor(color))
+        return false;
+    
+    // Demander l'épaisseur
+    CString strWidth = std::to_string(static_cast<int>(fWidth));
+    if(!guiGetValue(strWidth, "Stylo", "Épaisseur :"))
+        return false;
+    
+    try {
+        fWidth = std::stof(strWidth);
+    } catch(...) {
+        return false;
+    }
+    
+    // Le style de trait devra être simplifié ou géré différemment
+    return true;
+}
+```
+
+---
+
+## Phase 5 : Nettoyage Final et Finalisation
+
+### Fichiers à Supprimer
+
+#### Implémentations alternatives
+- `LibGraph2impDX.h/.cpp` ❌ (DirectX)
+- `LibGraph2impGL.h/.cpp` ❌ (OpenGL)
+- [LibGraph2impCommon.cpp](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2impCommon.cpp) ❌
+
+#### Fichiers de build Windows
+- [LibGraph2.vcxproj](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2.vcxproj) ❌
+- [LibGraph2.vcxproj.filters](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2.vcxproj.filters) ❌
+- [LibGraph2.vcxproj.user](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2.vcxproj.user) ❌
+
+#### Fichiers de ressources Windows
+- [LibGraph2.rc](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2.rc) ❌
+- [resource.h](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/resource.h) ❌
+
+#### En-têtes précompilés
+- `stdafx.h/.cpp` ❌
+- [targetver.h](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/targetver.h) ❌
+
+#### DLL Windows
+- [dllmain.cpp](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/dllmain.cpp) ❌
+
+### Adaptation de LibGraph2.h
+
+#### Suppressions Nécessaires
+
+**AVANT**
+```cpp
+#ifdef LIBGRAPH2_EXPORTS
+#define LIBGRAPH2_API __declspec(dllexport)
+#else
+#define LIBGRAPH2_API __declspec(dllimport)
+#endif
+
+#pragma comment(linker,"...")
+
+#include <Windows.h>
+#include <tchar.h>
+
+typedef DWORD ARGB;
+```
+
+**APRÈS**
+```cpp
+// Pas de __declspec sur Linux
+#define LIBGRAPH2_API
+
+// Remplacer les includes Windows
+#include <cstdint>
+#include <string>
+
+// Remplacer DWORD par uint32_t
+typedef uint32_t ARGB;
+```
+
+#### Types Windows à Remplacer
+
+| Type Windows | Remplacement Linux |
+|--------------|-------------------|
+| `DWORD`      | `uint32_t`        |
+| `BYTE`       | `uint8_t`         |
+| [HWND](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraphWnd.h#58-59)       | Supprimer         |
+| `HINSTANCE`  | Supprimer         |
+| `TCHAR`      | `char` ou `wchar_t` |
+| `LPCTSTR`    | `const char*`     |
+
+#### Fonction Principale
+
+**AVANT (Windows)**
+```cpp
+int APIENTRY _tWinMain(HINSTANCE hInstance,
+                       HINSTANCE hPrevInstance,
+                       LPTSTR    lpCmdLine,
+                       int       nCmdShow)
+{
+    ILibGraph2* libgraph = GetLibGraph2();
+    libgraph->show();
+    // ...
+}
+```
+
+**APRÈS (Linux)**
+```cpp
+int main(int argc, char* argv[])
+{
+    ILibGraph2* libgraph = GetLibGraph2();
+    libgraph->show();
+    // ...
+}
+```
+
+### Gestion des Niveaux (LIBGRAPH2_LEVEL)
+
+**Décision** : Simplifier ou supprimer la gestion des niveaux d'expérience (0-4). Cette fonctionnalité complexifie le code et n'est pas essentielle au portage. Si conservée, adapter les exemples de documentation pour utiliser `main()` au lieu de `_tWinMain()`.
+
+---
+
+## Résumé des Principaux Défis
+
+### 🔴 Défis Majeurs
+
+1. **drawPie** : SFML ne fournit pas de primitive "camembert". Nécessite une implémentation manuelle avec `sf::VertexArray` et `sf::TriangleFan`.
+
+2. **Styles de trait pointillés** : SFML ne supporte pas nativement les styles `Dash`, `Dot`, `DashDot`. Il faudra soit :
+   - Les implémenter manuellement
+   - Ignorer cette fonctionnalité
+   - Utiliser une bibliothèque tierce
+
+3. **Sélecteur de police/stylo** : tinyfiledialogs ne fournit pas ces dialogues. Solutions :
+   - Décomposer en plusieurs boîtes de dialogue simples
+   - Créer des dialogues personnalisés avec SFML
+   - Accepter une fonctionnalité réduite
+
+### 🟡 Défis Moyens
+
+4. **Gestion des polices** : Les chemins de polices diffèrent entre Windows et Linux. Nécessite une logique de recherche de polices système.
+
+5. **Textures et cache d'images** : Remplacer `Gdiplus::CachedBitmap` par `sf::Texture` avec un système de cache similaire.
+
+6. **Coordonnées normalisées** : La logique de [MapCoordinate](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2impGDIPLUS.h#87-89) / [UnmapCoordinate](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraph2impGDIPLUS.h#89-91) doit être adaptée au système de vues de SFML (`sf::View`).
+
+### 🟢 Défis Mineurs
+
+7. **Types de données** : Remplacer les types Windows (`DWORD`, [HWND](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraphWnd.h#58-59), etc.) par des types standards C++.
+
+8. **Encodage de caractères** : Gérer la conversion entre [wstring](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraphWnd.h#22-33) (Windows) et [string](file:///home/jeremi/Downloads/libGraph-master-LibGraph2/LibGraph2/LibGraphWnd.h#22-33) UTF-8 (Linux).
+
+---
+
+## Estimation de l'Effort
+
+| Phase | Complexité | Temps Estimé |
+|-------|-----------|--------------|
+| Phase 1 : CMake | Faible | 2-4 heures |
+| Phase 2 : Fenêtrage | Moyenne | 8-12 heures |
+| Phase 3 : Rendu | Élevée | 20-30 heures |
+| Phase 4 : Dialogues | Moyenne | 6-10 heures |
+| Phase 5 : Nettoyage | Faible | 4-6 heures |
+| **TOTAL** | - | **40-62 heures** |
+
+---
+
+## Recommandations
+
+1. **Approche incrémentale** : Porter une fonctionnalité à la fois et tester immédiatement.
+
+2. **Tests** : Créer des programmes de test pour chaque fonction de dessin.
+
+3. **Documentation** : Mettre à jour la documentation pour refléter les changements d'API.
+
+4. **Compatibilité** : Envisager de maintenir une version Windows et une version Linux avec des `#ifdef` si nécessaire.
+
+5. **Alternatives à drawPie** : Si l'implémentation manuelle est trop complexe, envisager d'utiliser une bibliothèque de rendu 2D plus complète comme Cairo ou Skia.
+
+---
+
+## Conclusion
+
+Le portage de LibGraph2 vers Linux est **techniquement faisable** mais nécessite un **refactoring significatif**. Les principales difficultés résident dans :
+- L'implémentation manuelle de certaines primitives graphiques (drawPie)
+- Le remplacement des boîtes de dialogue natives
+- La simplification de l'architecture de fenêtrage
+
+SFML est un excellent choix pour ce portage car il offre une API moderne, orientée objet et performante, tout en restant relativement simple à utiliser. La combinaison SFML + tinyfiledialogs permet de couvrir la majorité des fonctionnalités de LibGraph2 avec un code portable et maintenable.
