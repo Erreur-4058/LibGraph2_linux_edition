@@ -98,7 +98,11 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPTSTR lpCm
 ---
 
 ## ⚖️ Licence
+
 Ce projet est distribué sous licence **GPLv3**.
+
 Copyright © 2010-2024 Benjamin ALBOUY-KISSI.
+
 Projet original disponible sur le [GitLab de l'IUT](https://gitlab-lepuy.iut.uca.fr/bealbouy/libGraph).
+
 Portage Linux réalisé par **Jeremi Roux** (avec l'assistance d'Antigravity).
