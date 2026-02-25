@@ -35,21 +35,30 @@ make clean
 make
 ```
 
-### Avec g++ directement
-Si vous voulez compiler votre propre fichier (ex: `mon_code.cpp`) :
+### 2. Compilation de votre programme (avec g++)
+Si vous ne souhaitez pas utiliser CMake pour votre projet, vous pouvez compiler directement avec `g++`.
+
+> [!IMPORTANT]
+> Vous devez d'abord compiler la bibliothèque LibGraph2 elle-même (voir étape 1 ci-dessus) pour générer les fichiers suivants dans le dossier :
+> - `LibGraph2.h`
+> - `libLibGraph2.so`
+
+**Fichiers nécessaires :**
+Copiez les fichiers suivants dans le dossier de votre projet :
+- `LibGraph2.h`
+- `libLibGraph2.so`
+
+**Commande de compilation :**
 ```bash
-g++ mon_code.cpp -I. -L. -lLibGraph2 -lsfml-graphics -lsfml-window -lsfml-system -o mon_programme
+g++ main.cpp -L. -lLibGraph2 -lsfml-graphics -lsfml-window -lsfml-system -o mon_programme
 ```
 
----
-
-## 🏃 Exécution du programme
-
-Sur Linux, vous devez indiquer au système où se trouve le fichier `.so` de la bibliothèque au lancement :
+### 🏃 Exécution
+Si vous obtenez une erreur indiquant que `libLibGraph2.so` est introuvable au lancement, utilisez cette commande pour inclure le dossier courant dans le chemin des bibliothèques :
 
 ```bash
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:.
-./test_libgraph2
+./mon_programme
 ```
 
 ---
